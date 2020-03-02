@@ -4,7 +4,6 @@ from torchvision import models
 import cv2
 import sys
 import numpy as np
-from net import Net
 import matplotlib.pyplot as plt
 import argparse
 
