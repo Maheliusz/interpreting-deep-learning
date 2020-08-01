@@ -17,7 +17,7 @@ blur_radius = 11
 image_size = (32,32)
 tv_beta = 3
 learning_rate = 0.1
-max_iterations = 500
+max_iterations = 80
 l1_coeff = 0.01
 tv_coeff = 0.2
 with_tv = True
@@ -26,7 +26,10 @@ batch_size = 10
 #############################
 l1_mask = None
 vis = None
+class_masks = []
 #############################
+analyzed_class = 0
+analyzed_plane = 16
 
 use_cuda = False #torch.cuda.is_available()
 FloatTensor = torch.cuda.FloatTensor if use_cuda else torch.FloatTensor
@@ -43,8 +46,12 @@ parser.add_argument('--multimask', action='store_true')
 def tv_norm(input, tv_beta):
     img = input#[0, 0, :]
     # print(img.shape)
-    row_grad = torch.mean(torch.abs((img[:-1 , :] - img[1 :, :])).pow(tv_beta))
-    col_grad = torch.mean(torch.abs((img[: , :-1] - img[: , 1 :])).pow(tv_beta))
+    if len(img.shape) > 1:
+        row_grad = torch.mean(torch.abs((img[:-1 , :] - img[1 :, :])).pow(tv_beta))
+        col_grad = torch.mean(torch.abs((img[: , :-1] - img[: , 1 :])).pow(tv_beta))
+    else:
+        row_grad = torch.mean(torch.abs((img[:-1] - img[1 :])).pow(tv_beta))
+        col_grad = 0
     return row_grad + col_grad
 
 def preprocess_image(img):
@@ -86,7 +93,7 @@ def to_cam(img, mask):
 def save(masks, img, blurs, filename, loss):
     mask = None
     for item in masks:
-        _mask = item.cpu().data.numpy()[0]
+        _mask = (item.cpu() if not use_cuda else item.cuda()).data.numpy()[0]
         mask = _mask if mask is None else np.add(mask, _mask)
     mask /= len(masks)
     # mask = mask.cpu().data.numpy()[0]
@@ -137,6 +144,22 @@ def save(masks, img, blurs, filename, loss):
     plt.savefig('pics/'+filename + '_explained.png', bbox_inches='tight', pad_inches=0)
     plt.close()
 
+def plot_to_file(data, filename):
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    ax.imshow(data, interpolation='none')
+    ax.set_axis_off()
+    plt.subplots_adjust(top = 1, bottom = 0, right = 1, left = 0, 
+                hspace = 0, wspace = 0)
+    plt.margins(0,0)
+    ax.xaxis.set_major_locator(plt.NullLocator())
+    ax.yaxis.set_major_locator(plt.NullLocator())
+    if filename is not None:
+        fig.savefig(filename+'.png', bbox_inches='tight', pad_inches=0)
+        plt.close()
+    else:
+        plt.show()
+
 def numpy_to_torch(img, requires_grad = True):
     if len(img.shape) < 3:
         output = np.float32([img])
@@ -151,29 +174,25 @@ def numpy_to_torch(img, requires_grad = True):
     v = Variable(output, requires_grad = requires_grad)
     return v
 
-def layer_1_hook(module, input, output):
+def infohook(module, input, output):
+    print(output.shape, end='\r')
+    return output
+
+def hook_function(module, input, output):
     # print(output.shape)
     global vis
     vis = output.reshape(output.shape[-3:])
     # vis = output.reshape(-1, output.shape[-1])
-    np_vis = vis.cpu().data.numpy()[:]
+    np_vis = (vis.cpu() if not use_cuda else vis.cuda()).data.numpy()[:]
     # blurred_activations = []
     # for i in range(np_vis.shape[0]):
     #     blurred_activations.append(cv2.GaussianBlur(np_vis[i], (blur_radius, blur_radius), cv2.BORDER_DEFAULT))
     blurred_activations = np.expand_dims([cv2.GaussianBlur(_vis, (blur_radius, blur_radius), cv2.BORDER_DEFAULT) for _vis in np_vis], 0)
+    # blurred_activations = np.zeros(output.shape)
     # blurred_activations = np.expand_dims(blurred_activations, 0)
     # print(vis.shape)
     global l1_mask
     return output.mul(l1_mask) + torch.from_numpy(blurred_activations).mul(1-l1_mask)
-
-def layer_2_hook(module, input, output):
-    # print(output.shape)
-    global vis
-    vis = output.reshape(output.shape[-3:])
-    blurred_activations = cv2.GaussianBlur(vis.cpu().data.numpy(), (blur_radius, blur_radius), cv2.BORDER_DEFAULT)
-    print(vis.shape)
-    # img.mul(mask) + blurred_img.mul(1-mask)
-    return output
 
 def load_model(model_path):
     if not model_path:
@@ -184,6 +203,9 @@ def load_model(model_path):
     model.eval()
     if use_cuda:
         model.cuda()
+
+    # print(model)
+    # exit()
     
     if not model_path:
         for p in model.features.parameters():
@@ -191,10 +213,12 @@ def load_model(model_path):
         for p in model.classifier.parameters():
             p.requires_grad = False
 
-    model.conv1.register_forward_hook(layer_1_hook)
-    global vis
+    # model.conv1.register_forward_hook(hook_function)
+    # model.classifier[6].register_forward_hook(hook_function)
+    # model.features[25].register_forward_hook(infohook)
+    # global vis
     # shape = np.subtract(image_size, model.conv2.kernel_size) + 1
-    vis = np.ones((1,6, 28, 28))
+    # vis = np.ones((1, 1000))
     # vis = np.ones((1, 16, 10, 10))
 
     return model
@@ -219,8 +243,8 @@ def process_single_image(model, original_img, verbose=False):
     mask = numpy_to_torch(mask_init)
     # mask = numpy_to_torch(l1_mask)
     l1_mask = torch.from_numpy(l1_mask)
-    if use_cuda:
-        l1_mask = l1_mask.cuda()
+    # if use_cuda:
+    #     l1_mask = l1_mask.cuda()
     l1_mask = Variable(l1_mask, requires_grad = True)
 
     optimizer = torch.optim.Adam([l1_mask], lr=learning_rate)
@@ -229,19 +253,19 @@ def process_single_image(model, original_img, verbose=False):
         upsample = upsample.cuda()
 
     target = torch.nn.Softmax()(model(img))
-    category = np.argmax(target.cpu().data.numpy())
+    category = np.argmax((target.cpu() if not use_cuda else target.cuda()).data.numpy())
     if verbose:
         print("Category with highest probability {}".format(category))
         print("Optimizing.. ")
 
     prev = 0.0
     for i in range(max_iterations):
-        upsampled_mask = upsample(mask)
+        # upsampled_mask = upsample(mask)
         # The single channel mask is used with an RGB image, 
         # so the mask is duplicated to have 3 channel,
-        upsampled_mask = \
-            upsampled_mask.expand(1, 3, upsampled_mask.size(2), \
-                                        upsampled_mask.size(3))
+        # upsampled_mask = \
+        #     upsampled_mask.expand(1, 3, upsampled_mask.size(2), \
+        #                                 upsampled_mask.size(3))
         # l1_mask = \
         #     l1_mask.expand(1, 6, l1_mask.size(2), \
         #                                 l1_mask.size(3))
@@ -264,40 +288,134 @@ def process_single_image(model, original_img, verbose=False):
         # loss += tv_coeff*tv_norm(l1_mask, tv_beta) if with_tv else 0
 
         optimizer.zero_grad()
+        # print(loss, end='\r')
         loss.backward()
         optimizer.step()
-        loss_numpy = loss.cpu().data.numpy()
+        loss_numpy = (loss.cpu() if not use_cuda else loss.cuda()).data.numpy()
         print('\tIteration {},\tloss: {:0.6f}'.format(i+1, loss_numpy), end='\r')
 
         # Optional: clamping seems to give better results
         # mask.data.clamp_(0, 1)
         l1_mask.data.clamp_(0, 1)
-    # print(vis)
-    np_vis = vis.cpu().data.numpy()
-    np_vis = np_vis.reshape(-1, np_vis.shape[-1], np_vis.shape[-1])
-    masks = l1_mask.cpu().data.numpy().reshape(-1, np_vis.shape[-1], np_vis.shape[-1])
-    # plt.gcf().tight_layout()
-    plt.gcf().suptitle(loss.cpu().data.numpy())
-    for num in range(np_vis.shape[0]):
-        plt.subplot(2,np_vis.shape[0],num+1)
-        plt.axis('off')
-        # plt.imshow(to_cam(np_vis[num], masks[num]))
-        plt.imshow(np_vis[num])
-        plt.subplot(2,masks.shape[0],masks.shape[0]+num+1)
-        plt.axis('off')
-        plt.imshow(masks[num])
-    plt.gca().set_axis_off()
+    np_vis = (vis.cpu() if not use_cuda else vis.cuda()).data.numpy()
+    # np_vis = np_vis.reshape(-1, np_vis.shape[-2], np_vis.shape[-1])
+    masks = (l1_mask.cpu() if not use_cuda else l1_mask.cuda()).data.numpy()#.reshape(-1, np_vis.shape[-2], np_vis.shape[-1])
+    '''
+    fig = plt.figure(tight_layout=True)
+    ax = fig.add_subplot(1, 1, 1)
+    ax.imshow(masks, aspect = 1, interpolation='none')
+    ax.set_axis_off()
     plt.subplots_adjust(top = 1, bottom = 0, right = 1, left = 0, 
                 hspace = 0, wspace = 0)
     plt.margins(0,0)
-    plt.gca().xaxis.set_major_locator(plt.NullLocator())
-    plt.gca().yaxis.set_major_locator(plt.NullLocator())
-    plt.show()
+    ax.xaxis.set_major_locator(plt.NullLocator())
+    ax.yaxis.set_major_locator(plt.NullLocator())
+    fig.savefig('pics/vgg19_c6.png', dpi=fig.dpi, bbox_inches='tight', pad_inches=0)
+    '''
     print()
+    global class_masks
+    class_masks.append(masks)
 
     # upsampled_mask = upsample(mask)
-    return upsampled_mask, original_img, blurred_img_numpy, loss_numpy
+    # return upsampled_mask, original_img, blurred_img_numpy, loss_numpy
+    return None, original_img, blurred_img_numpy, loss_numpy
     # return l1_mask, vis, vis, loss_numpy
+
+
+def run(model, confs, imgpath=None, analyzed_class=analyzed_class, analyzed_plane=analyzed_plane):
+    global l1_mask, vis
+    if analyzed_plane == 34:
+        l1_mask = np.ones((1, 512, 2, 2))
+        vis = np.ones((1, 512, 2, 2))
+    elif analyzed_plane == 25:
+        l1_mask = np.ones((1, 512, 4, 4))
+        vis =  np.ones((1, 512, 4, 4))
+    elif analyzed_plane == 16:
+        l1_mask = np.ones((1, 256, 8, 8))
+        vis = np.ones((1, 256, 8, 8))
+    hook = model.features[analyzed_plane].register_forward_hook(hook_function)
+    if imgpath:
+        data = ((cv2.imread(imgpath, 1), classes.index(re.sub('[0-9]', '', imgpath.split('/')[-1].split('.')[0]))),)
+    else:
+        to_image = transforms.ToPILImage()
+        # trainset = torchvision.datasets.CIFAR10(root='./data', train=False,
+        #                                 download=True, transform=transforms.ToTensor())
+        trainset = torchvision.datasets.CIFAR100(root='./data100', train=False,
+                                        download=True, transform=transforms.ToTensor())
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
+                                                shuffle=True, num_workers=0)
+        data = []
+        # images, labels = iter(trainloader).next()
+        # print(labels[0])
+        # exit()
+        for images, labels in iter(trainloader):
+            data.extend(list(filter(lambda x: x[1].numpy() == analyzed_class, list(zip(images, labels)))))
+    class_counter = collections.Counter()
+    class_dict = {}
+    for i in data:
+        idx = int(i[1].numpy())
+        if idx in class_dict.keys():
+            class_dict[idx].append(i[0])
+        else:
+            class_dict[idx] = [i[0]]
+    # print(class_dict.keys())
+    # exit()
+    #TODO
+    # for analyzed_class in range(10):
+    items_of_class = class_dict[analyzed_class]
+    # global class_masks
+    # class_masks = []
+    for i, item in enumerate(items_of_class):
+        if i == 25:
+            break
+        img, label = item, analyzed_class
+        # if class_counter.get(classes[label], 0) > 1:
+        #     continue
+        img = img if args.imgpath else np.array(to_image(img).convert('RGB'))[:, :, ::-1].copy()
+
+        # print(classes[label])
+        # plt.imshow(img)
+        # plt.show()
+        # break
+
+        if classes[label] in class_counter:
+            class_counter[classes[label]]+=1
+        else:
+            class_counter.update([classes[label]])
+        title = classes[label]+str(class_counter[classes[label]])
+        print("Processing {}{},\t{}/{}".format(classes[label], class_counter.get(classes[label], 0), i+1, len(items_of_class)))
+        for j, conf in enumerate(confs):
+            print("\tConf {}/{}".format(j+1, len(confs)))
+            if args.multimask:
+                blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, _ = conf
+                upsampled_masks = []
+                blurred_img_numpys = []
+                losses = []
+                for scale in multimasks:
+                    print("Mask scale:\t{}".format(scale))
+                    mask_scale = scale
+                    upsampled_mask, original_img, blurred_img_numpy, loss = process_single_image(model, img, args.verbose)
+                    upsampled_masks.append(upsampled_mask)
+                    blurred_img_numpys.append(blurred_img_numpy)
+                    losses.append(loss)
+                loss = np.mean(losses)
+                _conf = conf
+                _conf[-1] = "multi"
+                # save(upsampled_masks, original_img, blurred_img_numpys, title+"".join(["_{}".format(item) for item in _conf]), loss)
+            else:
+                blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, mask_scale = conf
+                upsampled_mask, original_img, blurred_img_numpy, loss = process_single_image(model, img, args.verbose)
+                # save((upsampled_mask,), original_img, (blurred_img_numpy,), title+"".join(["_{}".format(item) for item in conf]), loss)
+    # global class_masks
+    np.save('pics/cifar100/class_{}_{}'.format(classes[analyzed_class], analyzed_plane), class_masks)
+    # _class_masks = np.array([np.concatenate(pic, axis=1) for pic in class_masks])
+    # _class_masks_reshaped = np.concatenate(_class_masks, axis=0)
+    # print(_class_masks_reshaped.shape)
+    # plot_to_file(_class_masks_reshaped, 'pics/class_{}_{}'.format(classes[analyzed_class], analyzed_plane))
+    # _class_masks_aggregated = np.sum(_class_masks, axis=0)
+    # plot_to_file(_class_masks_aggregated, 'pics/class_{}_agg_{}'.format(classes[analyzed_class], analyzed_plane))
+    hook.remove()
+
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -337,50 +455,23 @@ if __name__ == '__main__':
     multimasks = (1, 0.75, 0.5, 0.2, 0.1)
 
     model = load_model(args.model)
-    classes = ('plane', 'car', 'bird', 'cat',
-        'deer', 'dog', 'frog', 'horse', 'ship', 'truck')  
-    if args.imgpath:
-        data = ((cv2.imread(args.imgpath, 1), classes.index(re.sub('[0-9]', '', args.imgpath.split('/')[-1].split('.')[0]))),)
-    else:
-        to_image = transforms.ToPILImage()
-        trainset = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                        download=True, transform=transforms.ToTensor())
-        trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
-                                                shuffle=True, num_workers=0)
-        images, labels = iter(trainloader).next()
-        data = list(zip(images, labels))
-    class_counter = collections.Counter()
-    for i, item in enumerate(data):
-        img, label = item
-        if class_counter.get(classes[label], 0) > 1:
-            continue
-        img = img if args.imgpath else np.array(to_image(img).convert('RGB'))[:, :, ::-1].copy()
-        if classes[label] in class_counter:
-            class_counter[classes[label]]+=1
-        else:
-            class_counter.update([classes[label]])
-        title = classes[label]+str(class_counter[classes[label]])
-        print("Processing {}{},\t{}/{}".format(classes[label], class_counter.get(classes[label], 0), i+1, batch_size))
-        for j, conf in enumerate(confs):
-            print("\tConf {}/{}".format(j+1, len(confs)))
-            if args.multimask:
-                blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, _ = conf
-                upsampled_masks = []
-                blurred_img_numpys = []
-                losses = []
-                for scale in multimasks:
-                    print("Mask scale:\t{}".format(scale))
-                    mask_scale = scale
-                    upsampled_mask, original_img, blurred_img_numpy, loss = process_single_image(model, img, args.verbose)
-                    upsampled_masks.append(upsampled_mask)
-                    blurred_img_numpys.append(blurred_img_numpy)
-                    losses.append(loss)
-                loss = np.mean(losses)
-                _conf = conf
-                _conf[-1] = "multi"
-                # save(upsampled_masks, original_img, blurred_img_numpys, title+"".join(["_{}".format(item) for item in _conf]), loss)
-            else:
-                blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, mask_scale = conf
-                upsampled_mask, original_img, blurred_img_numpy, loss = process_single_image(model, img, args.verbose)
-                # save((upsampled_mask,), original_img, (blurred_img_numpy,), title+"".join(["_{}".format(item) for item in conf]), loss)
-
+    # classes = ('plane', 'car', 'bird', 'cat',
+    #     'deer', 'dog', 'frog', 'horse', 'ship', 'truck')  #for CIFAR-10
+    classes = ['apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 'bicycle', 
+    'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel', 'can', 'castle', 'caterpillar', 'cattle', 
+    'chair', 'chimpanzee', 'clock', 'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur', 
+    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster', 'house', 'kangaroo', 'keyboard', 
+    'lamp', 'lawn_mower', 'leopard', 'lion', 'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 
+    'mountain', 'mouse', 'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear', 
+    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine', 'possum', 'rabbit', 'raccoon', 
+    'ray', 'road', 'rocket', 'rose', 'sea', 'seal', 'shark', 'shrew', 'skunk', 'skyscraper', 'snail', 
+    'snake', 'spider', 'squirrel', 'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone', 
+    'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 
+    'wolf', 'woman', 'worm'] #for CIFAR100, fine names
+    # for i, item in enumerate(classes):
+    #     print('{}:\t{}'.format(i, item))
+    # exit()
+    for i in range(52, 100):
+        for j in (34, 25, 16):
+            class_masks = []
+            run(model, confs, args.imgpath, i, j)
