@@ -7,6 +7,7 @@ from explain import plot_to_file
 parser = argparse.ArgumentParser()
 parser.add_argument('fname')
 parser.add_argument('--stats', action='store_true')
+parser.add_argument('--filter', action='store_true')
 args = parser.parse_args()
 
 def reshape_to_2d(arr):
@@ -22,7 +23,7 @@ else:
 if args.stats:
     class_masks = {}
     for filename in files:
-        class_masks[filename.split('.')[0]] = (1 - np.load(os.path.join(absdir, filename))).mean(axis=2).mean(axis=2).mean(axis=0).sum()
+        class_masks[filename.split('.')[0]] = (1 - np.load(os.path.join(filename))).mean(axis=2).mean(axis=2).mean(axis=0).sum()
     with open(os.path.join(absdir, 'stats.csv'), 'w') as file:
         writer = csv.writer(file)
         for key, value in class_masks.items():
@@ -30,16 +31,43 @@ if args.stats:
             classname = '_'.join(key.split('_')[1:-1])
             layer = int(layer)
             writer.writerow((classname, layer, value))
+elif args.filter:
+    layers = list(set(['_'.join(x.split('.')[0].split('\\')[-1].split('_')[-2:]) for x in files]))
+    layers = list(set(map(lambda x: x.split('_')[-1] if 'fc' in x else x, layers)))
+    # print(layers)
+    # exit()
+    for layer in layers:
+        layer_masks = []
+        for filename in filter(lambda x: layer in x, files):
+            layer_masks.append(np.load(filename))
+        layer_masks = np.array(layer_masks)
+        layer_masks = np.reshape(layer_masks, (-1,)+layer_masks.shape[2:])
+        np.save(layer+'_agg', layer_masks)
+        if len(layer_masks.shape) > 3:
+            _class_masks = layer_masks.mean(axis=0)
+            _class_masks_reshaped = np.concatenate(_class_masks, axis=0).T
+        else:
+            _class_masks_reshaped = np.expand_dims(np.squeeze(layer_masks, axis=1).mean(axis=0), axis=0)
+        plot_to_file(_class_masks_reshaped, layer+'_agg')
 else:
     for filename in files:
         class_masks = np.load(filename)
         # print(class_masks.shape)
-        _class_masks = np.array([np.concatenate(pic, axis=1) for pic in class_masks])
-        _class_masks_reshaped = np.concatenate(_class_masks, axis=0)
+        # _class_masks = np.array([np.concatenate(pic, axis=1) for pic in class_masks])
+        # print(_class_masks.shape)
+        # _class_masks_reshaped = np.concatenate(_class_masks, axis=0)
+        # print(_class_masks_reshaped.shape)
+        # exit()
         # plot_to_file(np.expand_dims(np.mean(np.mean(np.mean(class_masks, axis=2), axis=2), axis=0), axis=0), None)
         # print(np.mean(np.mean(np.mean(class_masks, axis=2), axis=2), axis=0).shape)
         # print(np.expand_dims(np.mean(np.mean(np.mean(class_masks, axis=2), axis=2), axis=0), axis=0).shape)
         # print(class_masks.mean(axis=0).shape)
         # print(class_masks.max())
-        plot_to_file(_class_masks_reshaped, str(filename).split('.')[0])
-        plot_to_file(reshape_to_2d(np.expand_dims(class_masks.mean(axis=0), axis=0)), str(filename).split('.')[0]+'_agg')
+        # plot_to_file(_class_masks_reshaped, str(filename).split('.')[0])
+        # plot_to_file(reshape_to_2d(np.expand_dims(class_masks.mean(axis=0), axis=0)), str(filename).split('.')[0]+'_agg')
+        if len(class_masks.shape) > 3:
+            _class_masks = class_masks.mean(axis=0)
+            _class_masks_reshaped = np.concatenate(_class_masks, axis=0).T
+        else:
+            _class_masks_reshaped = np.expand_dims(np.squeeze(class_masks, axis=1).mean(axis=0), axis=0)
+        plot_to_file(_class_masks_reshaped, str(filename).split('.')[0]+'_agg')

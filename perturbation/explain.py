@@ -28,8 +28,8 @@ l1_mask = None
 vis = None
 class_masks = []
 #############################
-analyzed_class = 0
-analyzed_plane = 16
+# analyzed_class = 0
+# analyzed_plane = 16
 
 use_cuda = False #torch.cuda.is_available()
 FloatTensor = torch.cuda.FloatTensor if use_cuda else torch.FloatTensor
@@ -145,7 +145,7 @@ def save(masks, img, blurs, filename, loss):
     plt.close()
 
 def plot_to_file(data, filename):
-    fig = plt.figure()
+    fig = plt.figure(figsize=(data.shape[1]/plt.gcf().dpi, data.shape[0]/plt.gcf().dpi))
     ax = fig.add_subplot(1, 1, 1)
     ax.imshow(data, interpolation='none')
     ax.set_axis_off()
@@ -155,7 +155,7 @@ def plot_to_file(data, filename):
     ax.xaxis.set_major_locator(plt.NullLocator())
     ax.yaxis.set_major_locator(plt.NullLocator())
     if filename is not None:
-        fig.savefig(filename+'.png', bbox_inches='tight', pad_inches=0)
+        plt.savefig(filename+'.png')#, bbox_inches='tight', pad_inches=0)
         plt.close()
     else:
         plt.show()
@@ -176,6 +176,7 @@ def numpy_to_torch(img, requires_grad = True):
 
 def infohook(module, input, output):
     print(output.shape, end='\r')
+    exit()
     return output
 
 def hook_function(module, input, output):
@@ -187,8 +188,8 @@ def hook_function(module, input, output):
     # blurred_activations = []
     # for i in range(np_vis.shape[0]):
     #     blurred_activations.append(cv2.GaussianBlur(np_vis[i], (blur_radius, blur_radius), cv2.BORDER_DEFAULT))
-    blurred_activations = np.expand_dims([cv2.GaussianBlur(_vis, (blur_radius, blur_radius), cv2.BORDER_DEFAULT) for _vis in np_vis], 0)
-    # blurred_activations = np.zeros(output.shape)
+    # blurred_activations = np.expand_dims([cv2.GaussianBlur(_vis, (blur_radius, blur_radius), cv2.BORDER_DEFAULT) for _vis in np_vis], 0)
+    blurred_activations = np.zeros(output.shape, dtype=np.float32)
     # blurred_activations = np.expand_dims(blurred_activations, 0)
     # print(vis.shape)
     global l1_mask
@@ -248,10 +249,12 @@ def process_single_image(model, original_img, verbose=False):
     l1_mask = Variable(l1_mask, requires_grad = True)
 
     optimizer = torch.optim.Adam([l1_mask], lr=learning_rate)
-    upsample = torch.nn.UpsamplingBilinear2d(size=image_size)
+    # upsample = torch.nn.UpsamplingBilinear2d(size=image_size)
+    upsample = torch.nn.UpsamplingBilinear2d(size=(224,224))
     if use_cuda:
         upsample = upsample.cuda()
 
+    # img = upsample(img)
     target = torch.nn.Softmax()(model(img))
     category = np.argmax((target.cpu() if not use_cuda else target.cuda()).data.numpy())
     if verbose:
@@ -322,18 +325,12 @@ def process_single_image(model, original_img, verbose=False):
     # return l1_mask, vis, vis, loss_numpy
 
 
-def run(model, confs, imgpath=None, analyzed_class=analyzed_class, analyzed_plane=analyzed_plane):
+def run(model, confs, analyzed_class, analyzed_plane, imgpath=None):
     global l1_mask, vis
-    if analyzed_plane == 34:
-        l1_mask = np.ones((1, 512, 2, 2))
-        vis = np.ones((1, 512, 2, 2))
-    elif analyzed_plane == 25:
-        l1_mask = np.ones((1, 512, 4, 4))
-        vis =  np.ones((1, 512, 4, 4))
-    elif analyzed_plane == 16:
-        l1_mask = np.ones((1, 256, 8, 8))
-        vis = np.ones((1, 256, 8, 8))
-    hook = model.features[analyzed_plane].register_forward_hook(hook_function)
+    l1_mask = np.ones(mask_size)
+    vis = np.ones(mask_size)
+    # hook = model.features[analyzed_plane].register_forward_hook(hook_function)
+    hook = model.classifier[0].register_forward_hook(hook_function)
     if imgpath:
         data = ((cv2.imread(imgpath, 1), classes.index(re.sub('[0-9]', '', imgpath.split('/')[-1].split('.')[0]))),)
     else:
@@ -455,6 +452,8 @@ if __name__ == '__main__':
     multimasks = (1, 0.75, 0.5, 0.2, 0.1)
 
     model = load_model(args.model)
+    # print(model)
+    # exit()
     # classes = ('plane', 'car', 'bird', 'cat',
     #     'deer', 'dog', 'frog', 'horse', 'ship', 'truck')  #for CIFAR-10
     classes = ['apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 'bicycle', 
@@ -468,10 +467,45 @@ if __name__ == '__main__':
     'snake', 'spider', 'squirrel', 'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone', 
     'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 
     'wolf', 'woman', 'worm'] #for CIFAR100, fine names
+    coarse_classes = ["aquatic_mammals"	, "fish", "flowers", "food_containers", "fruit_and_vegetables", "household_electrical_devices", "household_furniture"	, "insects"	, "large_carnivores", "large_man-made_outdoor_things", "large_natural_outdoor_scenes", "large_omnivores_and_herbivores", "medium-sized_mammals", "non-insect_invertebrates", "people", "reptiles", "small_mammals", "trees", "vehicles_1", "vehicles_2",] 
+    fine_class_to_coarse = {
+        "beaver":0, "dolphin":0, "otter":0, "seal":0, "whale":0,
+        "aquarium_fish":1, "flatfish":1, "ray":1, "shark":1, "trout":1,
+        "orchids":2, "poppies":2, "roses":2, "sunflowers":2, "tulips":2,
+        "bottles":3, "bowls":3, "cans":3, "cups":3, "plates":3,
+        "apples":4, "mushrooms":4, "oranges":4, "pears":4, "sweet_peppers":4,
+        "clock":5, "computer_keyboard":5, "lamp":5, "telephone":5, "television":5,
+        "bed":6, "chair":6, "couch":6, "table":6, "wardrobe":6,
+        "bee":7, "beetle":7, "butterfly":7, "caterpillar":7, "cockroach":7,
+        "bear":8, "leopard":8, "lion":8, "tiger":8, "wolf":8,
+        "bridge":9, "castle":9, "house":9, "road":9, "skyscraper":9,
+        "cloud":10, "forest":10, "mountain":10, "plain":10, "sea":10,
+        "camel":11, "cattle":11, "chimpanzee":11, "elephant":11, "kangaroo":11,
+        "fox":12, "porcupine":12, "possum":12, "raccoon":12, "skunk":12,
+        "crab":13, "lobster":13, "snail":13, "spider":13, "worm":13,
+        "baby":14, "boy":14, "girl":14, "man":14, "woman":14,
+        "crocodile":15, "dinosaur":15, "lizard":15, "snake":15, "turtle":15,
+        "hamster":16, "mouse":16, "rabbit":16, "shrew":16, "squirrel":16,
+        "maple":17, "oak":17, "palm":17, "pine":17, "willow":17,
+        "bicycle":18, "bus":18, "motorcycle":18, "pickup_truck":18, "train":18,
+        "lawn_mower":19, "rocket":19, "streetcar":19, "tank":19, "tractor":19,
+    }
+    # if analyzed_plane in (34, 32, 30, 28):
+    #     mask_size= (1, 512, 2, 2)
+    # elif analyzed_plane == 25:
+    #     mask_size = (1, 512, 4, 4)
+    # elif analyzed_plane == 16:
+    #     mask_size = (1, 256, 8, 8)
+    mask_size = (1, 4096)
+    # nums = []
+    # for k, v in fine_class_to_coarse.items():
+    #     if v==0:
+    #         print(k)
+    #         nums.append(classes.index(k))
     # for i, item in enumerate(classes):
     #     print('{}:\t{}'.format(i, item))
     # exit()
-    for i in range(52, 100):
-        for j in (34, 25, 16):
+    for i in range(10):
+        for j in (0,):# 25, 16):
             class_masks = []
-            run(model, confs, args.imgpath, i, j)
+            run(model, confs, i, j, args.imgpath)
