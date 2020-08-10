@@ -34,8 +34,6 @@ if args.stats:
 elif args.filter:
     layers = list(set(['_'.join(x.split('.')[0].split('\\')[-1].split('_')[-2:]) for x in files]))
     layers = list(set(map(lambda x: x.split('_')[-1] if 'fc' in x else x, layers)))
-    # print(layers)
-    # exit()
     for layer in layers:
         layer_masks = []
         for filename in filter(lambda x: layer in x, files):
@@ -52,19 +50,6 @@ elif args.filter:
 else:
     for filename in files:
         class_masks = np.load(filename)
-        # print(class_masks.shape)
-        # _class_masks = np.array([np.concatenate(pic, axis=1) for pic in class_masks])
-        # print(_class_masks.shape)
-        # _class_masks_reshaped = np.concatenate(_class_masks, axis=0)
-        # print(_class_masks_reshaped.shape)
-        # exit()
-        # plot_to_file(np.expand_dims(np.mean(np.mean(np.mean(class_masks, axis=2), axis=2), axis=0), axis=0), None)
-        # print(np.mean(np.mean(np.mean(class_masks, axis=2), axis=2), axis=0).shape)
-        # print(np.expand_dims(np.mean(np.mean(np.mean(class_masks, axis=2), axis=2), axis=0), axis=0).shape)
-        # print(class_masks.mean(axis=0).shape)
-        # print(class_masks.max())
-        # plot_to_file(_class_masks_reshaped, str(filename).split('.')[0])
-        # plot_to_file(reshape_to_2d(np.expand_dims(class_masks.mean(axis=0), axis=0)), str(filename).split('.')[0]+'_agg')
         if len(class_masks.shape) > 3:
             _class_masks = class_masks.mean(axis=0)
             _class_masks_reshaped = np.concatenate(_class_masks, axis=0).T
