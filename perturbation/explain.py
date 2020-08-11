@@ -16,7 +16,7 @@ blur_radius = 11
 image_size = (32,32)
 tv_beta = 3
 learning_rate = 0.1
-max_iterations = 500
+max_iterations = 100
 l1_coeff = 0.01
 tv_coeff = 0.2
 with_tv = True
@@ -29,6 +29,9 @@ FloatTensor = torch.cuda.FloatTensor if use_cuda else torch.FloatTensor
 LongTensor = torch.cuda.LongTensor if use_cuda else torch.LongTensor
 Tensor = FloatTensor
 vgg = True
+state = 'original'
+layer_name = ''
+item_name = ''
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--imgpath', required=False)
@@ -148,6 +151,10 @@ def load_model(model_path):
 
     return model
 
+def hook_function(module, input, output):
+    np.save('{}_{}_{}'.format(item_name, layer_name, state), output.cpu().data.numpy())
+    pass
+
 def process_single_image(model, original_img, verbose=False):
     original_img = cv2.resize(original_img, image_size)
     img = np.float32(original_img) / 255
@@ -206,7 +213,7 @@ def process_single_image(model, original_img, verbose=False):
     print()
 
     upsampled_mask = upsample(mask)
-    return upsampled_mask, original_img, blurred_img_numpy, loss_numpy
+    return upsampled_mask, original_img, blurred_img_numpy, loss_numpy, img, blurred_img
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -214,7 +221,7 @@ if __name__ == '__main__':
         warnings.filterwarnings("ignore")
     confs = [
         # [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, mask_scale],
-        # [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, mask_scale],
+        [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, mask_scale],
         # [blur_radius, with_tv, 0.05, tv_coeff, max_iterations, mask_scale],
         # [blur_radius, with_tv, 0.1, tv_coeff, max_iterations, mask_scale],
         # [blur_radius, with_tv, 0.5, tv_coeff, max_iterations, mask_scale],
@@ -224,58 +231,98 @@ if __name__ == '__main__':
         # [blur_radius, with_tv, l1_coeff, 0.5, max_iterations, mask_scale],
         # [blur_radius, with_tv, l1_coeff, tv_coeff, 100, mask_scale],
         # [blur_radius, with_tv, l1_coeff, tv_coeff, 2000, mask_scale],
-        [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, 1],
-        [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, 0.75],
-        [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, 0.5],
-        [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, 0.1],
+        # [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, 1],
+        # [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, 0.75],
+        # [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, 0.5],
+        # [blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, 0.1],
     ]
     multimasks = (1, 0.75, 0.5, 0.2)
 
+    analyzed_class = range(10)
+
     model = load_model(args.model)
-    classes = ('plane', 'car', 'bird', 'cat',
-        'deer', 'dog', 'frog', 'horse', 'ship', 'truck')  
+    # classes = ('plane', 'car', 'bird', 'cat',
+    #     'deer', 'dog', 'frog', 'horse', 'ship', 'truck')  
+    classes = ['apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 'bicycle', 
+    'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel', 'can', 'castle', 'caterpillar', 'cattle', 
+    'chair', 'chimpanzee', 'clock', 'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur', 
+    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster', 'house', 'kangaroo', 'keyboard', 
+    'lamp', 'lawn_mower', 'leopard', 'lion', 'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 
+    'mountain', 'mouse', 'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear', 
+    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine', 'possum', 'rabbit', 'raccoon', 
+    'ray', 'road', 'rocket', 'rose', 'sea', 'seal', 'shark', 'shrew', 'skunk', 'skyscraper', 'snail', 
+    'snake', 'spider', 'squirrel', 'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone', 
+    'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 
+    'wolf', 'woman', 'worm'] #for CIFAR100, fine names
     if args.imgpath:
         data = ((cv2.imread(args.imgpath, 1), classes.index(re.sub('[0-9]', '', args.imgpath.split('/')[-1].split('.')[0]))),)
     else:
         to_image = transforms.ToPILImage()
-        trainset = torchvision.datasets.CIFAR10(root='./data', train=False,
+        trainset = torchvision.datasets.CIFAR100(root='./data100', train=False,
                                         download=True, transform=transforms.ToTensor())
         trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
                                                 shuffle=True, num_workers=0)
         images, labels = iter(trainloader).next()
-        data = list(zip(images, labels))
+        data = []
+        for images, labels in iter(trainloader):
+            data.extend(list(filter(lambda x: x[1].numpy() in analyzed_class, list(zip(images, labels)))))
     class_counter = collections.Counter()
-    for i, item in enumerate(data):
-        img, label = item
-        if class_counter.get(classes[label], 0) > 1:
-            continue
-        img = img if args.imgpath else np.array(to_image(img).convert('RGB'))[:, :, ::-1].copy()
-        if classes[label] in class_counter:
-            class_counter[classes[label]]+=1
+    class_dict = {}
+    for i in data:
+        idx = int(i[1].numpy())
+        if idx in class_dict.keys():
+            class_dict[idx].append(i[0])
         else:
-            class_counter.update([classes[label]])
-        title = classes[label]+str(class_counter[classes[label]])
-        print("Processing {}{},\t{}/{}".format(classes[label], class_counter.get(classes[label], 0), i+1, batch_size))
-        for j, conf in enumerate(confs):
-            print("\tConf {}/{}".format(j+1, len(confs)))
-            if args.multimask:
-                blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, _ = conf
-                upsampled_masks = []
-                blurred_img_numpys = []
-                losses = []
-                for scale in multimasks:
-                    print("Mask scale:\t{}".format(scale))
-                    mask_scale = scale
-                    upsampled_mask, original_img, blurred_img_numpy, loss = process_single_image(model, img, args.verbose)
-                    upsampled_masks.append(upsampled_mask)
-                    blurred_img_numpys.append(blurred_img_numpy)
-                    losses.append(loss)
-                loss = np.mean(losses)
-                _conf = conf
-                _conf[-1] = "multi"
-                save(upsampled_masks, original_img, blurred_img_numpys, title+"".join(["_{}".format(item) for item in _conf]), loss)
+            class_dict[idx] = [i[0]]
+    for a_class in range(10):
+        items_of_class = class_dict[a_class]
+        for i, item in enumerate(items_of_class):
+            if i == 2:
+                break
+            img, label = item, a_class
+            if class_counter.get(classes[label], 0) > 1:
+                continue
+            img = img if args.imgpath else np.array(to_image(img).convert('RGB'))[:, :, ::-1].copy()
+            if classes[label] in class_counter:
+                class_counter[classes[label]]+=1
             else:
-                blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, mask_scale = conf
-                upsampled_mask, original_img, blurred_img_numpy, loss = process_single_image(model, img, args.verbose)
-                save((upsampled_mask,), original_img, (blurred_img_numpy,), title+"".join(["_{}".format(item) for item in conf]), loss)
+                class_counter.update([classes[label]])
+            title = classes[label]+str(class_counter[classes[label]])
+            print("Processing {}{},\t{}/{}".format(classes[label], class_counter.get(classes[label], 0), i+1, batch_size))
+            for j, conf in enumerate(confs):
+                print("\tConf {}/{}".format(j+1, len(confs)))
+                if args.multimask:
+                    blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, _ = conf
+                    upsampled_masks = []
+                    blurred_img_numpys = []
+                    losses = []
+                    for scale in multimasks:
+                        print("Mask scale:\t{}".format(scale))
+                        mask_scale = scale
+                        upsampled_mask, original_img, blurred_img_numpy, loss, _, _ = process_single_image(model, img, args.verbose)
+                        upsampled_masks.append(upsampled_mask)
+                        blurred_img_numpys.append(blurred_img_numpy)
+                        losses.append(loss)
+                    loss = np.mean(losses)
+                    _conf = conf
+                    _conf[-1] = "multi"
+                    save(upsampled_masks, original_img, blurred_img_numpys, title+"".join(["_{}".format(item) for item in _conf]), loss)
+                else:
+                    blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, mask_scale = conf
+                    upsampled_mask, original_img, blurred_img_numpy, loss, tensor_img, blur_tensor = process_single_image(model, img, args.verbose)
+                    save((upsampled_mask,), original_img, (blurred_img_numpy,), title+"".join(["_{}".format(item) for item in conf]), loss)
+                    np.save(title, upsampled_mask.cpu().data.numpy())
+                    item_name = title
+                    for l, lname in ((model.features[32], 'conv5_3'), (model.features[34], 'conv5_4'), (model.classifier[0], 'fc1'), (model.classifier[3], 'fc2'), (model.classifier[6], 'fc3')):
+                        layer_name = lname
+                        state = 'original'
+                        hook = l.register_forward_hook(hook_function)
+                        torch.nn.Softmax()(model(tensor_img))
+                        state = 'modified'
+                        perturbated_input = tensor_img.mul(upsampled_mask) + \
+                                blur_tensor.mul(1-upsampled_mask)
+                        torch.nn.Softmax()(model(perturbated_input))
+                        hook.remove()
+
+
 
