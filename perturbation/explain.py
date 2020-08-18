@@ -152,7 +152,7 @@ def load_model(model_path):
     return model
 
 def hook_function(module, input, output):
-    np.save('{}_{}_{}'.format(item_name, layer_name, state), output.cpu().data.numpy())
+    np.save('{}-{}-{}'.format(item_name, layer_name, state), output.cpu().data.numpy())
     pass
 
 def process_single_image(model, original_img, verbose=False):

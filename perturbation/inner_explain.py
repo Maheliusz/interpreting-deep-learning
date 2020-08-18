@@ -245,7 +245,7 @@ def run(model, confs, analyzed_class, layer, layer_name, imgpath=None):
             print("\tConf {}/{}".format(j+1, len(confs)))
             blur_radius, with_tv, l1_coeff, tv_coeff, max_iterations, mask_scale = conf
             upsampled_mask, original_img, blurred_img_numpy, loss = process_single_image(model, img, args.verbose)
-    np.save('class_{}_{}'.format(classes[analyzed_class], layer_name), class_masks)
+    np.save('class-{}-{}'.format(classes[analyzed_class], layer_name), class_masks)
     hook.remove()
 
 
