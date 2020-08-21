@@ -300,12 +300,14 @@ if __name__ == '__main__':
     'snake', 'spider', 'squirrel', 'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone', 
     'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 
     'wolf', 'woman', 'worm'] #for CIFAR100, fine names
-    for i in range(11,12):
-        for j in ((model.features[32], 'conv5_3'), (model.features[34], 'conv5_4'), (model.classifier[0], 'fc1'),):
+    for i in range(10):
+        for j in ((model.classifier[3], 'fc2'), (model.classifier[6], 'output')):#, (model.features[32], 'conv5_3'), (model.features[34], 'conv5_4'), (model.classifier[0], 'fc1'),):
             class_masks = []
             layer, layer_name = j
-            if 'conv' in layer_name:
+            if 'conv5' in layer_name:
                 mask_size = (512,2,2)
-            else:
+            elif 'fc1' in layer_name or 'fc2' in layer_name:
                 mask_size = (4096,)
+            elif 'output' in layer_name:
+                mask_size = (1000,)
             run(model, confs, i, layer, layer_name, args.imgpath)
