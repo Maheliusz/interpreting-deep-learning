@@ -44,9 +44,8 @@ for _class in classes[:10]:
         plt.ylabel('in')
         plt.xlabel('out')
         plt.savefig(os.path.join(args.path,'corr-{}-{}.png'.format(_class, outp)))
+        
 
-
-exit()
 for k, filename in enumerate(files):
     print(filename)
     continue
