@@ -32,14 +32,14 @@ files = list(filter(lambda filename: filename.endswith('.npy'), os.listdir(args.
 
 for _class in classes[:10]:
     filtered_files = filter(lambda x: _class in x, files)
-    for inp, outp in (('conv5_3', 'conv5_4'),('conv5_4', 'fc1'),('fc1', 'fc2'),('fc2', 'output')):
+    for inp, outp in (('conv5_3', 'conv5_4'),('fc1', 'fc2'),('fc2', 'output')):
         inmask = torch.from_numpy(np.load(os.path.join(args.path, 'class-{}-{}.npy'.format(_class, inp))).mean(axis=0))
         outmask = torch.from_numpy(np.load(os.path.join(args.path, 'class-{}-{}.npy'.format(_class, outp))).mean(axis=0))
         if 'conv' in inp:
             inmask = inmask.mean(axis=1).mean(axis=1)
         if 'conv' in outp:
             outmask = outmask.mean(axis=1).mean(axis=1)
-        corr = np.outer(inmask, outmask)
+        corr = np.outer(outmask, inmask)
         plt.imshow(corr, norm=LogNorm())
         plt.ylabel('in')
         plt.xlabel('out')
